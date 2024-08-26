@@ -1,0 +1,165 @@
+import streamlit as st
+import PyPDF2
+import spacy
+from langchain.llms import OpenAI
+
+# Initialize OpenAI's GPT model
+llm = OpenAI(api_key='sk-None-78rzwMewV18IzLfTAw4HT3BlbkFJzlDU7Lp4BFH6FPkPzu6k')
+
+# Load spaCy model
+nlp = spacy.load("en_core_web_sm")
+
+def extract_text_from_pdf(file):
+    pdf_reader = PyPDF2.PdfReader(file)
+    text = ""
+    for page_num in range(len(pdf_reader.pages)):
+        page = pdf_reader.pages[page_num]
+        text += page.extract_text()
+    return text
+
+def generate_questions(text, difficulty):
+    prompt = f"""
+    Generate 5 {difficulty} level multiple-choice questions from the following text:
+    {text}
+
+    For each question, provide four options (a, b, c, d) with clear and concise language. Indicate the correct answer.
+
+    Format the questions and answers like this:
+
+    1. Question text
+    a) Option 1
+    b) Option 2
+    c) Option 3
+    d) Option 4
+    Answer: [Correct Option Letter]
+
+    easy questions should be less complex than medium questions which should be less complex than hard questions. hard questions are detailed and long and easy questions are short simple and concise.
+    """
+    response = llm.generate(prompts=[prompt], max_tokens=400, n=1, temperature=0.7)
+
+    questions = []
+    answers = []
+    for generation in response.generations[0]:
+        question_text = generation.text.strip()
+        question_lines = question_text.split("\n")
+
+        # Extract the answer line and store separately
+        answer_line = [line for line in question_lines if line.startswith('Answer:')][0]
+        answer = answer_line.replace("Answer: ", "").strip()
+
+        # Remove the answer line from the question text
+        question_without_answer = "\n".join([line for line in question_lines if not line.startswith("Answer:")])
+
+        questions.append(question_without_answer)
+        answers.append(answer)
+
+    return questions, answers
+
+def format_question(question):
+    lines = question.split('\n')
+    formatted_lines = []
+    for line in lines:
+        if line.startswith('a)') or line.startswith('b)') or line.startswith('c)') or line.startswith('d)'):
+            formatted_lines.append('\n' + line.strip())
+        else:
+            formatted_lines.append(line.strip())
+    formatted = '\n'.join(formatted_lines)
+    return formatted
+
+def generate_summary(text):
+    prompt = f"Summarize the following text:\n{text}"
+    response = llm.generate(prompts=[prompt], max_tokens=300, n=1, temperature=0.7)
+    summary = response.generations[0][0].text.strip()
+    return summary
+
+# Define the main page
+def main_page():
+    st.title("PDF to Question Generator with LangChain")
+    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+
+    if uploaded_file is not None:
+        # Extract text from the uploaded PDF
+        text = extract_text_from_pdf(uploaded_file)
+        st.session_state["extracted_text"] = text
+
+        # Select difficulty level for questions
+        difficulty = st.selectbox("Select difficulty level", ["easy", "medium", "hard"])
+
+        # Create columns for the buttons
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            generate_clicked = st.button("Generate Questions")
+
+        with col2:
+            view_text_clicked = st.button("View Extracted Text")
+
+        # Handle the button clicks
+        if generate_clicked:
+            questions, answers = generate_questions(text, difficulty)
+            st.session_state["questions"] = questions
+            st.session_state["answers"] = answers
+            st.session_state["show_answer_key"] = False  # Reset the state for showing answer key
+
+            st.subheader("Generated Questions")
+            for i, question in enumerate(questions):
+                formatted_question = format_question(question)
+                st.write(f"Question {i + 1}:")
+                st.write(formatted_question)
+
+            # Show the "Show Answer Key" button after generating questions
+            with col3:
+                if st.button("Show Answer Key"):
+                    st.session_state["show_answer_key"] = True  # Set state to show answer key
+
+        # Display answer key button next to the other buttons only if questions exist
+        if view_text_clicked:
+            st.session_state.page = "text_page"
+
+        # If show_answer_key is True, switch to the answer key page
+        if "show_answer_key" in st.session_state and st.session_state["show_answer_key"]:
+            st.session_state.page = "answer_key_page"
+
+# Define the extracted text page
+def text_page():
+    st.title("Extracted Text")
+
+    # Extracted text
+    extracted_text = st.session_state.get("extracted_text", "No text extracted.")
+    st.write(extracted_text)
+
+    # Generate and display summary
+    if st.button("Generate Summary"):
+        with st.spinner("Generating summary..."):
+            summary = generate_summary(extracted_text)
+            st.write("Summary:")
+            st.write(summary)
+
+    # Button to navigate back to the main page
+    if st.button("Back to Questions"):
+        st.session_state.page = "main_page"
+
+# Define the answer key page
+def answer_key_page():
+    st.title("Answer Key")
+    answers = st.session_state.get("answers", [])
+
+    if answers:
+        for i, answer in enumerate(answers):
+            st.write(f"Answer for Question {i+1}: {answer}")
+
+    # Button to navigate back to the main page
+    if st.button("Back to Questions"):
+        st.session_state.page = "main_page"
+
+# Set the initial page
+if "page" not in st.session_state:
+    st.session_state.page = "main_page"
+
+# Display the appropriate page
+if st.session_state.page == "main_page":
+    main_page()
+elif st.session_state.page == "text_page":
+    text_page()
+elif st.session_state.page == "answer_key_page":
+    answer_key_page()
